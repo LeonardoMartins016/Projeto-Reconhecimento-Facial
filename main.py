@@ -85,6 +85,7 @@ class FaceRecognitionLogin:
                                     for rect in face_locations]
                     
                     face_names = []
+                    recognized_known_user = None
                     if face_locations and self.known_face_encodings:
                         face_encodings = []
                         for face_location in face_locations:
@@ -108,14 +109,21 @@ class FaceRecognitionLogin:
                             # Tolerância ajustada para melhor performance
                             if face_distances[best_match_index] < 0.6:
                                 name = self.known_face_names[best_match_index]
-                                if not self.is_logged_in:
-                                    self.is_logged_in = True
-                                    self.current_user = name
+                                if recognized_known_user is None: # Prioritize the first recognized known user
+                                    recognized_known_user = name
                             else:
                                 name = "Desconhecido"
                             face_names.append(name)
+
+                    if recognized_known_user:
+                        self.is_logged_in = True
+                        self.current_user = recognized_known_user
+                    else:
+                        self.is_logged_in = False
+                        self.current_user = None
                     
                     # Escala as localizações de volta para o frame original
+                    
                     face_locations = [(top * 4, right * 4, bottom * 4, left * 4) 
                                     for (top, right, bottom, left) in face_locations]
                     
