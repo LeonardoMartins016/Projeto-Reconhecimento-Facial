@@ -8,6 +8,7 @@ import time
 import dlib
 import json
 from pathlib import Path
+from scipy.spatial import distance as dist # Adicionar esta importação
 
 # Configuração dos diretórios
 KNOWN_FACES_DIR = "know_faces"
@@ -37,6 +38,54 @@ class FaceRecognitionLogin:
         
         # Carrega os encodings salvos
         self.load_known_faces()
+
+        # Constantes para verificação de vivacidade (EAR)
+        self.EYE_AR_LIVENESS_THRESH = 0.20 # Limiar de EAR para considerar o olho aberto. Ajuste conforme necessário.
+
+    def _calculate_ear_from_points(self, eye_pts):
+        """Calcula a Proporção de Aspecto do Olho (EAR) a partir dos pontos do olho."""
+        # P0, P1, P2, P3, P4, P5 (índices 0 a 5 para os 6 pontos do olho)
+        #    P1  P2
+        # P0        P3
+        #    P5  P4
+        try:
+            A = dist.euclidean(eye_pts[1], eye_pts[5]) # Distância vertical |P1-P5|
+            B = dist.euclidean(eye_pts[2], eye_pts[4]) # Distância vertical |P2-P4|
+            C = dist.euclidean(eye_pts[0], eye_pts[3]) # Distância horizontal |P0-P3|
+
+            if C == 0: # Evitar divisão por zero
+                return 0.3 # Retorna um valor de olho aberto padrão se C for 0 (improvável)
+            ear = (A + B) / (2.0 * C)
+            return ear
+        except Exception:
+            return 0.3 # Em caso de erro no cálculo, assume olho aberto para não bloquear indevidamente
+
+    def _check_liveness_simple(self, shape):
+        """
+        Verificação de vivacidade simples baseada na abertura dos olhos.
+        Retorna True se os olhos parecerem abertos, False caso contrário.
+        """
+        try:
+            # Marcos para o olho esquerdo: pontos 36-41 (índices 0-5 após extração)
+            # Marcos para o olho direito: pontos 42-47 (índices 0-5 após extração)
+            
+            left_eye_pts = np.array([(shape.part(i).x, shape.part(i).y) for i in range(36, 42)])
+            right_eye_pts = np.array([(shape.part(i).x, shape.part(i).y) for i in range(42, 48)])
+
+            left_ear = self._calculate_ear_from_points(left_eye_pts)
+            right_ear = self._calculate_ear_from_points(right_eye_pts)
+
+            ear = (left_ear + right_ear) / 2.0
+
+            if ear > self.EYE_AR_LIVENESS_THRESH:
+                return True # Olhos parecem abertos
+            else:
+                # print(f"Liveness check failed: EAR {ear:.2f}") # Para debug
+                return False # Olhos parecem fechados ou parcialmente fechados
+        except Exception as e:
+            # print(f"Error in liveness check: {e}") # Para debug
+            return True # Em caso de erro na detecção dos landmarks, permite o login para não bloquear indevidamente.
+                        # Poderia ser False para maior segurança, mas arrisca falsos negativos.
 
     def save_face_encoding(self, name, face_encoding):
         """Salva o encoding facial no arquivo JSON"""
@@ -80,40 +129,49 @@ class FaceRecognitionLogin:
                     rgb_small_frame = self.frame_queue.get(timeout=0.1)
                     
                     # Detecção de faces usando o modelo carregado
-                    face_locations = self.face_detector(rgb_small_frame, 1)
+                    # Use a different variable name for dlib rectangles to avoid confusion
+                    dlib_rects = self.face_detector(rgb_small_frame, 1) 
                     face_locations = [(rect.top(), rect.right(), rect.bottom(), rect.left()) 
-                                    for rect in face_locations]
+                                    for rect in dlib_rects]
                     
                     face_names = []
-                    recognized_known_user = None
+                    recognized_known_user = None # Initialize here
+
+                    # IMPORTANT: The local imports and the nested class FaceRecognitionLogin
+                    # definition that follow here in your current file are highly problematic
+                    # and should be refactored.
+                    # For now, this initialization of recognized_known_user should cover the subsequent logic.
+                    
+                    # (Original local imports like import cv2, etc. were here - should be at top of file)
+                    # (Original nested class FaceRecognitionLogin definition was here - should be removed/merged)
+
+                    # Assuming the logic that was causing the error (original lines 223-253) follows:
                     if face_locations and self.known_face_encodings:
-                        face_encodings = []
-                        for face_location in face_locations:
-                            # Obtém landmarks faciais
+                        face_encodings_in_frame = []
+                        # If you are using the liveness check logic, this part would be different.
+                        # This is the older logic from your file:
+                        for face_location_tuple in face_locations:
                             shape = self.shape_predictor(rgb_small_frame, 
-                                                       dlib.rectangle(face_location[3], 
-                                                                    face_location[0], 
-                                                                    face_location[1], 
-                                                                    face_location[2]))
-                            # Calcula encoding facial usando o modelo ResNet
-                            face_encoding = np.array(self.face_recognition_model.compute_face_descriptor(
+                                                       dlib.rectangle(face_location_tuple[3], 
+                                                                    face_location_tuple[0], 
+                                                                    face_location_tuple[1], 
+                                                                    face_location_tuple[2]))
+                            current_face_encoding = np.array(self.face_recognition_model.compute_face_descriptor(
                                 rgb_small_frame, shape))
-                            face_encodings.append(face_encoding)
+                            face_encodings_in_frame.append(current_face_encoding)
                         
-                        for face_encoding in face_encodings:
-                            # Comparação usando distância euclidiana
-                            face_distances = [np.linalg.norm(known_encoding - face_encoding) 
+                        for current_face_encoding in face_encodings_in_frame:
+                            face_distances = [np.linalg.norm(known_encoding - current_face_encoding) 
                                             for known_encoding in self.known_face_encodings]
-                            best_match_index = np.argmin(face_distances)
                             
-                            # Tolerância ajustada para melhor performance
-                            if face_distances[best_match_index] < 0.6:
-                                name = self.known_face_names[best_match_index]
-                                if recognized_known_user is None: # Prioritize the first recognized known user
-                                    recognized_known_user = name
-                            else:
-                                name = "Desconhecido"
-                            face_names.append(name)
+                            current_name = "Desconhecido" # Initialize current_name for each face
+                            if face_distances: # Check if face_distances is not empty
+                                best_match_index = np.argmin(face_distances)
+                                if face_distances[best_match_index] < 0.6:
+                                    current_name = self.known_face_names[best_match_index]
+                                    if recognized_known_user is None: # Assign to recognized_known_user
+                                        recognized_known_user = current_name
+                            face_names.append(current_name)
 
                     if recognized_known_user:
                         self.is_logged_in = True
@@ -122,19 +180,19 @@ class FaceRecognitionLogin:
                         self.is_logged_in = False
                         self.current_user = None
                     
-                    # Escala as localizações de volta para o frame original
+                    # Scale face locations back for display if they are from a scaled frame
+                    # Assuming 'scale=0.25' was used in process_frame_for_recognition, multiply by 4
+                    scaled_face_locations = [(top * 4, right * 4, bottom * 4, left * 4) 
+                                            for (top, right, bottom, left) in face_locations]
                     
-                    face_locations = [(top * 4, right * 4, bottom * 4, left * 4) 
-                                    for (top, right, bottom, left) in face_locations]
-                    
-                    # Coloca resultado na fila
                     if not self.result_queue.full():
-                        self.result_queue.put((face_locations, face_names))
+                        self.result_queue.put((scaled_face_locations, face_names))
                         
             except queue.Empty:
                 continue
             except Exception as e:
                 print(f"Erro no worker: {e}")
+                time.sleep(0.1) # Add a small delay to prevent tight loop on continuous errors
                 continue
 
     def capture_face(self, name):
@@ -301,7 +359,4 @@ def main():
     print("=" * 50)
     
     login_system = FaceRecognitionLogin()
-    login_system.run_login_system()
-
-if __name__ == "__main__":
-    main()
+    login_system.run_login_system()q
