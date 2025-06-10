@@ -105,7 +105,7 @@ class FaceRecognitionLogin:
 
     def setup_camera(self):
         """Configura e retorna a webcam com configurações otimizadas"""
-        video_capture = cv2.VideoCapture(1)
+        video_capture = cv2.VideoCapture(0)
         if not video_capture.isOpened():
             raise Exception("Não foi possível acessar a webcam")
         
@@ -359,4 +359,7 @@ def main():
     print("=" * 50)
     
     login_system = FaceRecognitionLogin()
-    login_system.run_login_system()q
+    login_system.run_login_system()
+
+if __name__ == "__main__":
+    main()
